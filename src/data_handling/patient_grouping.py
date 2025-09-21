@@ -46,8 +46,8 @@ if __name__ == "__main__":
     experiment_name = f"leads_{'_'.join(required_leads)}_tst0.25_rd42.json"
     experiment_dir = os.path.join(DATA_DIR, 'input', 'experiment')
     experriment = {
-        "train_patients": train_patients,
-        "test_patients": test_patients
+        "train": train_patients,
+        "test": test_patients
     }
 
     # Save splits  
