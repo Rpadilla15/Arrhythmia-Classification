@@ -47,7 +47,8 @@ if __name__ == "__main__":
     experiment_dir = os.path.join(DATA_DIR, 'input', 'experiment')
     experriment = {
         "train": train_patients,
-        "test": test_patients
+        "test": test_patients,
+        "leads": required_leads
     }
 
     # Save splits  
