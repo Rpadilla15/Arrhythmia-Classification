@@ -62,11 +62,32 @@ class ECGPreprocessor:
             sig = resample(sig, n_samples)
         return sig
 
-    def process(self, sig):
+    def signal_process(self, sig):
         sig = self.filter_signal(sig)
         sig = self.normalize(sig)
         sig = self.resample_signal(sig)
         return sig
+    
+    def process(self, sig_df, ann_df,mapping):
+        # Map labels to AMII groups
+        ann, labels = map_annotations(ann_df, mapping)
+
+        # Process the signal for each lead 
+        signals = {}
+        for lead in sig_df.columns[1:]:  # skip "sample #"
+            sig = sig_df[lead].values
+            sig_proc = self.signal_process(sig)
+            signals[lead] = sig_proc
+        if self.target_fs and self.target_fs != self.fs:
+            # Adjust annotations
+            ann = (ann * self.target_fs / self.fs).astype(int)
+        
+        annotations = {
+            "samples": ann,
+            "labels": labels
+        }
+
+        return signals, annotations
 
 
 def process_record(csv_file, ann_file, out_dir, mapping, preprocessor):
@@ -74,23 +95,14 @@ def process_record(csv_file, ann_file, out_dir, mapping, preprocessor):
     df = pd.read_csv(csv_file)
     df.columns = df.columns.str.strip().str.strip("'").str.strip('"')
 
-    signals = {}
-    for lead in df.columns[1:]:  # skip "sample #"
-        sig = df[lead].values
-        sig_proc = preprocessor.process(sig)
-        signals[lead] = sig_proc
-
     # Load annotations
     ann_df = pd.read_csv(ann_file, sep='\s+', index_col=False, skiprows=1,
                          names=["Time", "Sample", "Type", "Sub", "Chan", "Num", "Aux"], quoting=3)
     
-    samples, labels = map_annotations(ann_df, mapping)
-
-    annotations = {
-        "samples": samples,  # numpy array of R-peak positions
-        "labels": labels,    # list of mapped AAMI labels
-    }
     
+    
+    signals, annotations = preprocessor.process(df,ann_df,mapping)
+
     # Save preprocessed signals and annotations
     record = {
         "signals": signals,
