@@ -39,14 +39,18 @@ if __name__ == "__main__":
     print(f"Patients with leads {required_leads}: {grouped_patients}")
 
     # Example: Split into train and test sets
-    train_patients, test_patients = train_test_split(grouped_patients, test_size=0.25, random_state=42)
+    train_patients, test_patients = train_test_split(grouped_patients, test_size=0.20, random_state=42)
+    train_patients, val_patients = train_test_split(train_patients, test_size=0.25, random_state=42)
+    
     print(f"Train patients: {train_patients}")
+    print(f"Validation patients: {val_patients}")
     print(f"Test patients: {test_patients}")
 
     experiment_name = f"leads_{'_'.join(required_leads)}_tst0.25_rd42.json"
     experiment_dir = os.path.join(DATA_DIR, 'input', 'experiment')
     experriment = {
         "train": train_patients,
+        "val": val_patients,
         "test": test_patients,
         "leads": required_leads
     }

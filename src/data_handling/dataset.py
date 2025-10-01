@@ -7,7 +7,7 @@ import json
 class ECGDataset(Dataset):
     def __init__(self, data_dir, json_file_path,
                  window_size=1000, stride=500, split='train', 
-                 mode="sliding"):
+                 mode="sliding", mask_ratio=0.4, mask_patch_size=50): # Added masking parameters
         """
         Args:
             data_dir(str): directory with preprocessed .npy files
@@ -16,11 +16,15 @@ class ECGDataset(Dataset):
             split (str): 'train' or 'test' to select the patient subset
             json_file_path (str): Path to the JSON file containing the train/test patient split
             mode(str): "sliding" (SSL) or "beat" (classification)
+            mask_ratio (float): The proportion of the signal patches to randomly mask (0.0 to 1.0), used in 'sliding' mode.
+            mask_patch_size (int): The size of contiguous samples treated as a "patch" for masking.
         """
         self.window_size = window_size
         self.stride = stride
         self.mode = mode
         self.split = split
+        self.mask_ratio = mask_ratio         
+        self.mask_patch_size = mask_patch_size 
         self.all_data = []
         self.data_dir = data_dir
 
@@ -71,7 +75,7 @@ class ECGDataset(Dataset):
             for lead in self.leads:
                 sig = rec["signals"][lead]
                 segs.append(sig[pos:pos+self.window_size])
-        else:  # beat-centered
+        elif self.mode == "beat":  # beat-centered
             half = self.window_size // 2
             for lead in self.leads:
                 sig = rec["signals"][lead]
@@ -80,10 +84,47 @@ class ECGDataset(Dataset):
         # shape: (n_channels, window_size)
         x = torch.tensor(np.stack(segs), dtype=torch.float32)
 
-        # Classification returns label, SSL just signal
-        if self.mode == "beat":
+        if self.mode == "sliding":
+            # Random masking
+            x_masked = x.clone()
+            
+            patch_size = self.mask_patch_size
+            window_size = self.window_size
+            
+            # Calculate the number of patches available
+            num_patches = window_size // patch_size
+            
+            if num_patches == 0 or self.mask_ratio == 0.0:
+                # Cannot mask if window is too small or ratio is zero
+                return x, x
+
+            num_mask_patches = int(self.mask_ratio * num_patches)
+            
+            # Ensure at least one patch is masked if ratio > 0 and num_patches > 0
+            if num_mask_patches == 0 and self.mask_ratio > 0:
+                num_mask_patches = 1
+
+            # Randomly select patch indices to mask
+            # Using np.arange(num_patches) for the pool of indices
+            masked_indices = np.random.choice(
+                np.arange(num_patches), 
+                size=num_mask_patches, 
+                replace=False
+            )
+            
+            # Apply masking (set the selected patches in y to zero)
+            for i in masked_indices:
+                start = i * patch_size
+                end = start + patch_size
+                # Mask across all channels (leads)
+                x_masked[:, start:end] = 0.0 
+                
+            # Return the masked input (x_masked) and the original target (x)
+            return  x_masked, x
+    
+        # Classification returns label
+        elif self.mode == "beat":
             # map sample to label
             label_idx = np.where(rec["annotations"]["samples"] == pos)[0][0]
             y = rec["annotations"]["labels"][label_idx]
             return x, y
-        return x
