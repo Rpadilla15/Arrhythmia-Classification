@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 
-class ECGAutoencoder(nn.Module):
+class CNNAutoencoder(nn.Module):
     def __init__(self, in_channels=1, latent_dim=64):
         super().__init__()
         

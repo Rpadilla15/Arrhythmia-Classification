@@ -2,7 +2,7 @@ from data_handling import (
     ECGDataset
 )
 from model import (
-    ECGAutoencoder, 
+    CNNAutoencoder, 
     TransformerAutoencoder,
     train_autoencoder
 )
@@ -51,8 +51,8 @@ autoencoder = TransformerAutoencoder(in_channels=2, emb_size=32, patch_size=10, 
 
 
 # Train
-output_dir = os.path.join(DATA_DIR, 'output', 'ecg_autoencoder.pth')
+output_dir = os.path.join(DATA_DIR, 'output', 'ecg_autoencoder_TRF.pth')
 device = "cuda" if torch.cuda.is_available() else "cpu"
-autoencoder = train_autoencoder(autoencoder, train_loader=train_loader,val_loader=val_loader, num_epochs=1, lr=1e-3, device=device, save_path=output_dir)
+autoencoder = train_autoencoder(autoencoder, train_loader=train_loader,val_loader=val_loader, num_epochs=300, lr=1e-3, device=device, save_path=output_dir)
 
 

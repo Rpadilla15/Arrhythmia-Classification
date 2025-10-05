@@ -1,0 +1,88 @@
+import torch
+import torch.nn as nn
+
+# ---- Patch Embedding for 1D ----
+class PatchEmbedding1D(nn.Module):
+    def __init__(self, signal_length=256, patch_size=16, in_channels=1, embed_dim=64):
+        super().__init__()
+        self.num_patches = signal_length // patch_size
+        self.proj = nn.Conv1d(in_channels, embed_dim, kernel_size=patch_size, stride=patch_size)
+
+    def forward(self, x):
+        # x: [B, C, L]
+        x = self.proj(x)  # [B, embed_dim, num_patches]
+        x = x.transpose(1, 2)  # [B, num_patches, embed_dim]
+        return x
+
+
+# ---- Transformer Encoder Block ----
+class TransformerEncoderBlock(nn.Module):
+    def __init__(self, embed_dim=64, num_heads=4, mlp_ratio=2.0, dropout=0.1):
+        super().__init__()
+        self.norm1 = nn.LayerNorm(embed_dim)
+        self.attn = nn.MultiheadAttention(embed_dim, num_heads, dropout=dropout, batch_first=True)
+        self.norm2 = nn.LayerNorm(embed_dim)
+
+        hidden_dim = int(embed_dim * mlp_ratio)
+        self.mlp = nn.Sequential(
+            nn.Linear(embed_dim, hidden_dim),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim, embed_dim),
+            nn.Dropout(dropout),
+        )
+
+    def forward(self, x):
+        x = x + self.attn(self.norm1(x), self.norm1(x), self.norm1(x))[0]
+        x = x + self.mlp(self.norm2(x))
+        return x
+
+
+# ---- 1D Vision Transformer ----
+class ViT1D(nn.Module):
+    def __init__(self, signal_length=256, patch_size=16, in_channels=1, num_classes=10,
+                 embed_dim=64, depth=6, num_heads=4, mlp_ratio=2.0, dropout=0.1):
+        super().__init__()
+
+        self.patch_embed = PatchEmbedding1D(signal_length, patch_size, in_channels, embed_dim)
+        num_patches = self.patch_embed.num_patches
+
+        self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
+        self.pos_embed = nn.Parameter(torch.zeros(1, num_patches + 1, embed_dim))
+        self.dropout = nn.Dropout(dropout)
+
+        self.blocks = nn.ModuleList([
+            TransformerEncoderBlock(embed_dim, num_heads, mlp_ratio, dropout)
+            for _ in range(depth)
+        ])
+        self.norm = nn.LayerNorm(embed_dim)
+        self.head = nn.Linear(embed_dim, num_classes)
+
+    def forward(self, x):
+        B = x.size(0)
+        x = self.patch_embed(x)  # [B, num_patches, embed_dim]
+
+        # Add CLS token
+        cls_tokens = self.cls_token.expand(B, -1, -1)
+        x = torch.cat((cls_tokens, x), dim=1)
+
+        # Positional embedding
+        x = x + self.pos_embed
+        x = self.dropout(x)
+
+        # Transformer blocks
+        for blk in self.blocks:
+            x = blk(x)
+
+        x = self.norm(x)
+        print("Transformer output shape:", x.shape)
+        cls_output = x[:, 0]  # take CLS token
+        return self.head(cls_output)
+
+
+# ---- Example ----
+if __name__ == "__main__":
+    model = ViT1D(signal_length=256, patch_size=16, in_channels=1, num_classes=5)
+    dummy_input = torch.randn(8, 1, 256)  # batch of 8, 1D signals of length 256
+    output = model(dummy_input)
+    print("Output shape:", output.shape)  # [8, num_classes]
