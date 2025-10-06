@@ -16,8 +16,10 @@ if __name__ == "__main__":
 
 
     preprocessed_data_dir = os.path.join(DATA_DIR, 'input', 'preprocessed_data',"fs250_bp0.5-45Hz")
-    json_split_path = os.path.join(DATA_DIR, 'input', 'experiment', 'leads_MLII_V1_tst0.25_rd42.json')
-    output_dir = os.path.join(DATA_DIR, 'output', 'mae_beat')
+    # json_split_path = os.path.join(DATA_DIR, 'input', 'experiment', 'leads_MLII_V1_tst0.25_rd42.json')
+    json_split_path = os.path.join(DATA_DIR, 'input', 'experiment', '1.json')
+
+    output_dir = os.path.join(DATA_DIR, 'output', 'test')
 
 
     # Example: signals [N, 1, 2048]
@@ -39,7 +41,7 @@ if __name__ == "__main__":
     model = TransformerAutoencoder(
         in_channels=2,
         emb_size=128,
-        patch_size=16,
+        patch_size=128,
         num_layers=2,
         nhead=4,
         max_len=256
@@ -50,7 +52,7 @@ if __name__ == "__main__":
         model=model,
         train_dataset=train_dataset,
         val_dataset=val_dataset,
-        num_epochs=1,
+        num_epochs=20,
         batch_size=256,
         learning_rate=1e-3,
         weight_decay=0.05,
@@ -62,26 +64,5 @@ if __name__ == "__main__":
         num_workers=4
     )
 
-    # Plot training curves    
-    fig, axes = plt.subplots(1, 2, figsize=(12, 4))
     
-    # Loss curves
-    axes[0].plot(history['train_loss'], label='Train')
-    axes[0].plot(history['val_loss'], label='Validation')
-    axes[0].set_xlabel('Epoch')
-    axes[0].set_ylabel('Loss')
-    axes[0].set_title('Training and Validation Loss')
-    axes[0].legend()
-    axes[0].grid(True, alpha=0.3)
     
-    # Learning rate
-    axes[1].plot(history['learning_rate'])
-    axes[1].set_xlabel('Epoch')
-    axes[1].set_ylabel('Learning Rate')
-    axes[1].set_title('Learning Rate Schedule')
-    axes[1].grid(True, alpha=0.3)
-    
-    plt.tight_layout()
-    plt.savefig('training_curves.png', dpi=150, bbox_inches='tight')
-    print("Training curves saved to training_curves.png")
-    plt.show()
