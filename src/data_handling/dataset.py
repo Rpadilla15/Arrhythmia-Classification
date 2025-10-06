@@ -1,56 +1,59 @@
 import os
+import json
 import torch
 import numpy as np
 from torch.utils.data import Dataset
-import json
+import torch.nn.functional as F
+
+
 
 class ECGDataset(Dataset):
     def __init__(self, data_dir, json_file_path,
-                 window_size=1000, split='train', 
-                 mode="ssl"): # Added masking parameters
+                 window_size=1000, split='train',
+                 mode='ssl', transform=None):
         """
         Args:
-            data_dir(str): directory with preprocessed .npy files
-            window_size(int): length of window in samples
-            split (str): 'train' or 'test' to select the patient subset
-            json_file_path (str): Path to the JSON file containing the train/test patient split
-            mode(str): "ssl" (SSL) or "clsf" (classification)
+            data_dir (str): Directory containing preprocessed .npy files.
+            json_file_path (str): JSON file with train/test patient splits.
+            window_size (int): Segment length in samples.
+            split (str): 'train' or 'test'.
+            mode (str): 'ssl' (self-supervised) or 'clsf' (classification).
+            transform (callable, optional): Augmentation/transform function.
         """
+        self.data_dir = data_dir
         self.window_size = window_size
         self.mode = mode
         self.split = split
-        self.all_data = []
-        self.data_dir = data_dir
+        self.transform = transform
 
-        # Load the patient split from the JSON file
+        # Load patient splits and lead configuration
         with open(json_file_path, 'r') as f:
             patient_splits = json.load(f)
-        
         self.leads = patient_splits['leads']
         patient_ids = patient_splits[split]
+
         print(f"Loading data for {len(patient_ids)} patients from '{split}' split...")
 
-        # preload all patients
+        # Preload all available patient recordings
         self.records = []
-        for patient_id in patient_ids:
-            file_path = os.path.join(self.data_dir, f"{patient_id}.npy")
-            if not os.path.exists(file_path):
-                print(f"Warning: File not found for patient {patient_id}. Skipping.")
+        for pid in patient_ids:
+            path = os.path.join(self.data_dir, f"{pid}.npy")
+            if not os.path.exists(path):
+                print(f"Warning: missing file for patient {pid}.")
                 continue
             try:
-                rec = np.load(file_path, allow_pickle=True).item()
+                rec = np.load(path, allow_pickle=True).item()
                 self.records.append(rec)
             except Exception as e:
-                print(f"Error processing file {file_path}: {e}")
-                continue
+                print(f"Error loading {pid}: {e}")
 
-        # build global index (patient_idx, position)
+        # Build global index of (record_id, position)
         self.index = []
-        for rec_id, rec in enumerate(self.records):
+        for rid, rec in enumerate(self.records):
             sig_len = len(rec["signals"][self.leads[0]])
             for s in rec["annotations"]["samples"]:
-                    if s - window_size//2 >= 0 and s + window_size//2 <= sig_len:
-                        self.index.append((rec_id, s))
+                if s - window_size // 2 >= 0 and s + window_size // 2 <= sig_len:
+                    self.index.append((rid, s))
 
     def __len__(self):
         return len(self.index)
@@ -59,53 +62,99 @@ class ECGDataset(Dataset):
         rec_id, pos = self.index[idx]
         rec = self.records[rec_id]
 
-        # Collect all requested leads
-        segs = []
-        
         half = self.window_size // 2
-        for lead in self.leads:
-            sig = rec["signals"][lead]
-            segs.append(sig[pos-half:pos+half])
+        segs = [
+            rec["signals"][lead][pos - half:pos + half]
+            for lead in self.leads
+        ]
 
-        # shape: (n_channels, window_size)
+        # shape → (n_channels, window_size)
         x = torch.tensor(np.stack(segs), dtype=torch.float32)
+
+        # Apply transform/augmentation (now torch-compatible)
+        if self.transform is not None:
+            x = self.transform(x)
 
         if self.mode == "ssl":
             return x
-    
-        # Classification returns label
+
         elif self.mode == "clsf":
-            # map sample to label
             label_idx = np.where(rec["annotations"]["samples"] == pos)[0][0]
             y = rec["annotations"]["labels"][label_idx]
-            return x, y
+            return x, torch.tensor(y, dtype=torch.long)
 
 
 class ECGAugmentation:
-    """Simple augmentations for ECG signals."""
-    def __init__(self, 
-                 amplitude_scale_range=(0.9, 1.1),
-                 baseline_shift_range=(-0.05, 0.05),
-                 noise_std=0.01):
-        self.amp_range = amplitude_scale_range
-        self.baseline_range = baseline_shift_range
-        self.noise_std = noise_std
-    
-    def __call__(self, x):
-        # x: [2, 256] numpy array
-        
-        # Random amplitude scaling
-        scale = np.random.uniform(*self.amp_range)
+    """Torch-compatible ECG augmentations with presets and optional time warping."""
+
+    PRESETS = {
+        "ssl": {
+            "amplitude_scale_range": (0.8, 1.2),
+            "baseline_shift_range": (-0.1, 0.1),
+            "noise_std": 0.02,
+            "time_warp_range": (0.8, 1.2),
+            "time_warp_prob": 0.7,
+        },
+        "clsf": {
+            "amplitude_scale_range": (0.95, 1.05),
+            "baseline_shift_range": (-0.05, 0.05),
+            "noise_std": 0.01,
+            "time_warp_range": (0.9, 1.1),
+            "time_warp_prob": 0.3,
+        }
+    }
+
+    def __init__(self, preset=None, **kwargs):
+        """
+        Args:
+            preset (str, optional): One of {'ssl', 'clsf', 'domain'} for predefined settings.
+            kwargs: Override specific parameters if desired.
+        """
+        # Start from preset defaults if provided
+        config = self.PRESETS.get(preset, {}).copy()
+        config.update(kwargs)  # override with user-provided values
+
+        self.amp_range = config.get("amplitude_scale_range", (0.9, 1.1))
+        self.baseline_range = config.get("baseline_shift_range", (-0.05, 0.05))
+        self.noise_std = config.get("noise_std", 0.01)
+        self.time_warp_range = config.get("time_warp_range", (0.9, 1.1))
+        self.time_warp_prob = config.get("time_warp_prob", 0.5)
+
+    def __call__(self, x: torch.Tensor):
+        """Apply augmentation pipeline to ECG segment [n_channels, window_size]."""
+        # Amplitude scaling
+        scale = torch.empty(1).uniform_(*self.amp_range).item()
         x = x * scale
-        
-        # Random baseline shift
-        shift = np.random.uniform(*self.baseline_range)
+
+        # Baseline shift
+        shift = torch.empty(1).uniform_(*self.baseline_range).item()
         x = x + shift
-        
-        # Add Gaussian noise
+
+        # Time warping
+        if torch.rand(1).item() < self.time_warp_prob:
+            x = self._time_warp(x)
+
+        # Add noise
         if self.noise_std > 0:
-            noise = np.random.normal(0, self.noise_std, x.shape)
-            x = x + noise
-        
+            x = x + torch.randn_like(x) * self.noise_std
+
         return x
 
+    def _time_warp(self, x: torch.Tensor):
+        """Apply uniform time stretch/compression using linear interpolation."""
+        n_channels, window_size = x.shape
+        factor = torch.empty(1).uniform_(*self.time_warp_range).item()
+        new_len = int(window_size * factor)
+
+        x = x.unsqueeze(0)  # shape: [1, n_channels, window_size]
+        x_warped = F.interpolate(x, size=new_len, mode='linear', align_corners=False)
+
+        # Crop or pad to original length
+        if new_len > window_size:
+            start = (new_len - window_size) // 2
+            x_warped = x_warped[:, :, start:start + window_size]
+        else:
+            pad = (window_size - new_len) // 2
+            x_warped = F.pad(x_warped, (pad, window_size - new_len - pad))
+
+        return x_warped.squeeze(0)
