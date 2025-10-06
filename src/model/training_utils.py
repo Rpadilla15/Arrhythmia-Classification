@@ -5,6 +5,7 @@ from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 import numpy as np
 import os
+import json
 
 
 
@@ -312,4 +313,7 @@ def train_mae(
     print(f"Final model saved to: {save_dir}/final_model.pt")
     print(f"{'='*60}\n")
     
-    return history
+    # Save training history
+    exp_name = "history.json"
+    with open(os.path.join(save_dir, exp_name), 'w') as f:
+        json.dump(history, f, indent=4)
