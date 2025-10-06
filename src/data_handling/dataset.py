@@ -81,3 +81,31 @@ class ECGDataset(Dataset):
             return x, y
 
 
+class ECGAugmentation:
+    """Simple augmentations for ECG signals."""
+    def __init__(self, 
+                 amplitude_scale_range=(0.9, 1.1),
+                 baseline_shift_range=(-0.05, 0.05),
+                 noise_std=0.01):
+        self.amp_range = amplitude_scale_range
+        self.baseline_range = baseline_shift_range
+        self.noise_std = noise_std
+    
+    def __call__(self, x):
+        # x: [2, 256] numpy array
+        
+        # Random amplitude scaling
+        scale = np.random.uniform(*self.amp_range)
+        x = x * scale
+        
+        # Random baseline shift
+        shift = np.random.uniform(*self.baseline_range)
+        x = x + shift
+        
+        # Add Gaussian noise
+        if self.noise_std > 0:
+            noise = np.random.normal(0, self.noise_std, x.shape)
+            x = x + noise
+        
+        return x
+

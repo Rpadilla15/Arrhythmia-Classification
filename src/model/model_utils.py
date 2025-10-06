@@ -1,167 +1,97 @@
-from tqdm.auto import tqdm
 import torch
 import torch.nn as nn
-import torch.optim as optim
-
-def train_autoencoder(
-    model, train_loader,  save_path, val_loader=None, num_epochs=10, lr=1e-3, device="cpu", lambda_freq=0.3
-):
-    model = model.to(device)
-    optimizer = optim.Adam(model.parameters(), lr=lr)
-    criterion = nn.MSELoss()
-    freq_loss = FrequencyLoss()
- 
-    best_val_loss = float("inf")
-    best_model_wts = None
-
-    for epoch in range(num_epochs):
-        # ----------------
-        # Training
-        # ----------------
-        model.train()
-        total_train_loss = 0.0
-
-        with tqdm(
-            total=len(train_loader), desc=f"Epoch {epoch+1}/{num_epochs} [Train]", unit="batch"
-        ) as pbar:
-            for signal, label in train_loader:
-                signal, label = signal.to(device), label.to(device)   # shape: [B, C, T]
-                recon, _ = model(signal)
-
-                mse = criterion(recon, label)
-                freq = freq_loss(recon, label)
-                loss = mse + lambda_freq * freq
-
-                optimizer.zero_grad()
-                loss.backward()
-                optimizer.step()
-
-                total_train_loss += loss.item() * signal.size(0)
-
-                pbar.set_postfix(loss=f"{loss.item():.4f}")
-                pbar.update(1)
-
-        avg_train_loss = total_train_loss / len(train_loader.dataset)
-
-        # ----------------
-        # Validation
-        # ----------------
-        avg_val_loss = None
-        if val_loader is not None:
-            model.eval()
-            total_val_loss = 0.0
-            with torch.no_grad():
-                with tqdm(
-                    total=len(val_loader), desc=f"Epoch {epoch+1}/{num_epochs} [Val]", unit="batch"
-                ) as pbar:
-                    for signal, label in val_loader:
-                        signal, label = signal.to(device), label.to(device)   # shape: [B, C, T]
-                        recon, _ = model(signal)
-                        
-                        mse = criterion(recon, label)
-                        freq = freq_loss(recon, label)
-                        loss = mse + lambda_freq * freq
-
-                        total_val_loss += loss.item() * signal.size(0)
-
-                        pbar.set_postfix(loss=f"{loss.item():.4f}")
-                        pbar.update(1)
-
-            avg_val_loss = total_val_loss / len(val_loader.dataset)
-
-            # ----------------
-            # Save best model
-            # ----------------
-            if avg_val_loss < best_val_loss:
-                best_val_loss = avg_val_loss
-                best_model_wts = model.state_dict()
-                torch.save(best_model_wts, save_path)
-                print(f"✅ New best model saved with Val Loss: {best_val_loss:.6f}")
-
-        # ----------------
-        # Epoch Summary
-        # ----------------
-        if avg_val_loss is not None:
-            print(
-                f"Epoch {epoch+1}/{num_epochs} "
-                f"- Train Loss: {avg_train_loss:.6f} | Val Loss: {avg_val_loss:.6f}"
-            )
-        else:
-            print(f"Epoch {epoch+1}/{num_epochs} - Train Loss: {avg_train_loss:.6f}")
-
-    if best_model_wts is not None:
-        model.load_state_dict(best_model_wts)
-        
-    return model
+import math
 
 
-import torch
-import torch.nn as nn
-
-class FrequencyLoss(nn.Module):
-    """
-    Implements a Frequency Loss (Spectral Loss) based on the Mean Squared Error
-    of the magnitude spectrum derived from the Fast Fourier Transform (FFT).
-
-    This loss helps prevent 'blurry' or overly smooth reconstructions by penalizing
-    differences in the frequency domain, forcing the model to reproduce sharp
-    features (high frequencies) correctly.
-
-    The loss is calculated only on the positive frequency components (the first
-    half of the spectrum, which is sufficient for real-valued signals).
-    """
-
-    def __init__(self, reduction='mean'):
-        """
-        Initializes the FrequencyLoss module.
-
-        Args:
-            reduction (str): Specifies the reduction to apply to the output:
-                             'none' | 'mean' | 'sum'. Default: 'mean'
-        """
+# -----------------
+# Positional Embedding for 1D signal
+# -----------------
+class PositionalEncoding(nn.Module):
+    def __init__(self, d_model, dropout=0.0, max_len=5000):
         super().__init__()
-        self.reduction = reduction
-        self.mse_loss = nn.MSELoss(reduction=reduction)
+        self.dropout = nn.Dropout(p=dropout)
 
-    def forward(self, reconstructed_signal: torch.Tensor, target_signal: torch.Tensor) -> torch.Tensor:
+        position = torch.arange(max_len).unsqueeze(1)  # [max_len, 1]
+        div_term = torch.exp(torch.arange(0, d_model, 2) * (-math.log(10000.0) / d_model))
+        pe = torch.zeros(max_len, d_model)
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+        pe = pe.unsqueeze(0)  # [1, max_len, d_model]
+        self.register_buffer('pe', pe)
+
+    def forward(self, x):
+        # x: [B, seq_len, d_model]
+        x = x + self.pe[:, :x.size(1)]
+        return self.dropout(x)
+
+# -----------------
+# Learned Positional Embedding (Decoder)
+# -----------------
+class LearnedPositionalEmbedding(nn.Module):
+    """Learned positional embeddings without dropout for decoder."""
+    def __init__(self, max_len, d_model):
+        super().__init__()
+        self.pos_embedding = nn.Parameter(torch.randn(1, max_len, d_model) * 0.02)
+    
+    def forward(self, x):
+        # x: [B, seq_len, d_model]
+        seq_len = x.size(1)
+        return x + self.pos_embedding[:, :seq_len, :]
+    
+# -----------------
+# Patch Embedding for 1D signal
+# -----------------
+class PatchEmbedding1D(nn.Module):
+    def __init__(self, in_channels=1, emb_size=64, patch_size=10):
+        super().__init__()
+        self.proj = nn.Conv1d(in_channels, emb_size, kernel_size=patch_size, stride=patch_size)
+        self.cls_token = nn.Parameter(torch.randn(1, 1, emb_size))
+        self.pos_emb_generator = PositionalEncoding(emb_size)
+
+    def forward(self, x):
+        # x: [B, C, T]
+        x = self.proj(x)             # [B, emb_size, T//patch_size]
+        x = x.permute(0, 2, 1)       # [B, num_patches, emb_size]
+
+        # Generate sinusoidal pos embedding dynamically
+        x = self.pos_emb_generator(x)
+
+        # Add CLS token
+        cls_token = self.cls_token.expand(x.size(0), -1, -1)  # [B, 1, emb_size]
+        x = torch.cat([cls_token, x], dim=1)  # [B, num_patches+1, emb_size]
+
+        return x
+
+def patch_proj(x, patch_size):
         """
-        Calculates the frequency loss between the reconstructed and target signals.
-
-        Args:
-            reconstructed_signal (torch.Tensor): The model's output signal.
-                                                  Shape: (Batch, Channels, Length)
-            target_signal (torch.Tensor): The ground-truth signal.
-                                          Shape: (Batch, Channels, Length)
-
-        Returns:
-            torch.Tensor: The calculated frequency loss.
+        Transforms a tensor from [B, C, T] to [B, T//patch_size, C * patch_size] 
+        using a single chained operation.
         """
-        if reconstructed_signal.shape != target_signal.shape:
-            raise ValueError(f"Input tensors must have the same shape. Got {reconstructed_signal.shape} and {target_signal.shape}")
+        B, C, T = x.shape
+        num_patches = T // patch_size
 
-        # 1. Apply Fast Fourier Transform (FFT)
-        # torch.fft.fft works on the last dimension by default (the signal length)
-        fft_reconstructed = torch.fft.fft(reconstructed_signal)
-        fft_target = torch.fft.fft(target_signal)
+        output_tensor = x.view(B, C, num_patches, patch_size) \
+                                .permute(0, 2, 1, 3) \
+                                .reshape(B, num_patches, C * patch_size)
+        return output_tensor
 
-        # 2. Extract the Magnitude Spectrum
-        # torch.abs() computes the magnitude of the complex numbers.
-        magnitude_reconstructed = torch.abs(fft_reconstructed)
-        magnitude_target = torch.abs(fft_target)
+def patch_proj_inv(tensor_transformed, C, patch_size):
+    """
+    Transforms a tensor from [B, N, F] back to [B, C, T].
+    where N = T//length_chunk and F = C * length_chunk.
 
-        # 3. Focus on the positive frequency components (the first half)
-        # For real-valued signals, the spectrum is symmetric. We only need the first half.
-        # This saves computation and avoids redundancy.
-        signal_length = reconstructed_signal.size(-1)
-        # Only take up to the Nyquist frequency (plus one for the DC component)
-        half_length = signal_length // 2 + 1
-        
-        magnitude_reconstructed_half = magnitude_reconstructed[..., :half_length]
-        magnitude_target_half = magnitude_target[..., :half_length]
-
-        # 4. Calculate MSE (L2) loss on the magnitude spectra
-        # This penalizes differences in the overall energy distribution across frequencies.
-        loss = self.mse_loss(magnitude_reconstructed_half, magnitude_target_half)
-
-        return loss
-
+    Args:
+        tensor_transformed (torch.Tensor): The input tensor.
+        C (int): The original number of channels.
+        length_chunk (int): The original length of the time chunks.
+    """
+    B = tensor_transformed.shape[0]
+    num_patches = tensor_transformed.shape[1]
+    
+    # 1. view F (C*L) into (C, L)
+    # 2. permute to move C back to the 2nd dimension
+    # 3. reshape the two temporal dimensions (num_patches and L) into T
+    output_tensor_bct = tensor_transformed.view(B, num_patches, C, patch_size) \
+                                          .permute(0, 2, 1, 3) \
+                                          .reshape(B, C, -1) # -1 infers the final T dimension
+    return output_tensor_bct
