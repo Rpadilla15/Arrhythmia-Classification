@@ -193,7 +193,6 @@ def train_mae(
         scheduler.step()
 
         avg_loss = total_loss / len(train_loader)
-        print(f"Epoch {epoch}/{epochs} - Loss: {avg_loss:.4f}")
 
         # Validation
         if val_loader is not None:
@@ -272,7 +271,7 @@ if __name__ == "__main__":
 
     # mae = MAE1D(encoder=encoder, decoder_embed_dim=64, decoder_depth=2, mask_ratio=0.75)
 
-    model = TransformerAutoencoder(in_channels=2, emb_size=64, patch_size=32, num_layers=2, nhead=4)
+    model = TransformerAutoencoder(in_channels=2, emb_size=128, patch_size=32, num_layers=2, nhead=4)
 
     train_mae(model, train_dataset, val_dataset, save_dir=output_dir, batch_size=128, epochs=400)
 
