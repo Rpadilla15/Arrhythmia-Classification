@@ -4,6 +4,10 @@ There are 2 dependency related files:
     - requirements.txt       # Pip dependency list file
     - environment.yml        # Conda environment file
 
+Unfortunately the requirements.txt contains few of the modules we actually use,
+you can try it but I'd recomend using conda or otherwise downloading the dependencies 
+as you encounter the trouble. You can use environment.yml for guidance with the version.
+
 If using conda, it is easy to create the environment using
     conda env create -f environment.yml
 and all dependencies should become installed. 
