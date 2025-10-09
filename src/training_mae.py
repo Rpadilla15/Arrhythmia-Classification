@@ -19,7 +19,7 @@ if __name__ == "__main__":
     # json_split_path = os.path.join(DATA_DIR, 'input', 'experiment', 'leads_MLII_V1_tst0.25_rd42.json')
     json_split_path = os.path.join(DATA_DIR, 'input', 'experiment', '1.json')
 
-    output_dir = os.path.join(DATA_DIR, 'output', 'test')
+    output_dir = os.path.join(DATA_DIR, 'output', 'encoder', 'test')
 
 
     # Example: signals [N, 1, 2048]
@@ -40,8 +40,8 @@ if __name__ == "__main__":
     # Initialize model
     model = TransformerAutoencoder(
         in_channels=2,
-        emb_size=128,
-        patch_size=128,
+        emb_size=64,
+        patch_size=16,
         num_layers=2,
         nhead=4,
         max_len=256
@@ -52,7 +52,7 @@ if __name__ == "__main__":
         model=model,
         train_dataset=train_dataset,
         val_dataset=val_dataset,
-        num_epochs=20,
+        num_epochs=1,
         batch_size=256,
         learning_rate=1e-3,
         weight_decay=0.05,
