@@ -70,7 +70,7 @@ class ECGPreprocessor:
     
     def process(self, sig_df, ann_df,mapping):
         # Map labels to AMII groups
-        ann, labels = map_annotations(ann_df, mapping)
+        ann, labels = map_annotations(ann_df, mapping, one_hot=True)
 
         # Process the signal for each lead 
         signals = {}
@@ -114,14 +114,18 @@ def process_record(csv_file, ann_file, out_dir, mapping, preprocessor):
     np.save(os.path.join(out_dir, f"{rec_id}.npy"), record)
 
 
-def map_annotations(ann_df, mapping):
+def map_annotations(ann_df, mapping, one_hot=False):
     """Filter and map annotations to arrhytmia groups."""
-    valid = []
+    location = []
     labels = []
+    labels_set = sorted(list(set(mapping.values())))
     for i, row in ann_df.iterrows():
         raw_label = row["Type"]
         if raw_label in mapping:
-            valid.append(row["Sample"])
-            labels.append(mapping[raw_label])
-    return np.array(valid), labels
+            location.append(row["Sample"])
+            if one_hot:
+                labels.append([1 if mapping[raw_label]==cls else 0 for cls in labels_set])
+            else:
+                labels.append(mapping[raw_label])  # first element is the class index
+    return np.array(location), np.array(labels)
 
