@@ -1,14 +1,17 @@
 import torch
 import torch.nn as nn
 
-class ECGClassifier(nn.Module):
+class MLP_head(nn.Module):
     def __init__(self, encoder, num_classes=5):
         super().__init__()
         self.encoder = encoder
-        self.pool = nn.AdaptiveAvgPool1d(1)  # handles variable length
-        self.fc = nn.Linear(64, num_classes)
+        self.fc1 = nn.Linear(64, 128)
+        self.fc2 = nn.Linear(128, num_classes)
+        self.relu  = nn.ReLU()
+        self.softmax = nn.Softmax(dim=1)
     
     def forward(self, x):
-        z = self.encoder(x)
-        z = self.pool(z).squeeze(-1)
-        return self.fc(z)
+        z = self.encoder.encode(x)
+        z = self.relu(self.fc1(z))
+        out = self.softmax(self.fc2(z))
+        return out
