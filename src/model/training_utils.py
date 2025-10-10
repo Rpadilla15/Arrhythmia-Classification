@@ -54,7 +54,7 @@ class EarlyStopping:
         return self.early_stop
 
 
-def train_epoch(model, train_loader, optimizer, scheduler, device, mask_ratio, epoch):
+def train_epoch(model, train_loader, optimizer, scheduler, device, mask_ratio, epoch, loss=None):
     """Train for one epoch."""
     model.train()
     total_loss = 0
@@ -64,12 +64,18 @@ def train_epoch(model, train_loader, optimizer, scheduler, device, mask_ratio, e
             total=len(train_loader), desc=f"Epoch {epoch} [Train]", unit="batch"
         ) as pbar:
         for batch in train_loader:
-            batch = batch.to(device)  # [B, 2, 256]
-            
-            # Forward pass
-            output = model(batch, mask_ratio=mask_ratio)
-            loss = output['loss']
-            
+
+            if loss is None: # SSL
+                batch = batch.to(device)  # [B, 2, 256]
+                # Forward pass
+                output = model(batch, mask_ratio=mask_ratio)
+                loss = output['loss']
+            else: # Classification
+                inputs, targets = batch
+                inputs, targets = inputs.to(device), targets.to(device)
+                outputs = model(inputs)
+                loss = loss(outputs, targets)
+
             # Backward pass
             optimizer.zero_grad()
             loss.backward()
@@ -96,7 +102,7 @@ def train_epoch(model, train_loader, optimizer, scheduler, device, mask_ratio, e
 
 
 @torch.no_grad()
-def validate(model, val_loader, device, mask_ratio, epoch):
+def validate(model, val_loader, device, mask_ratio, epoch, loss=None):
     """Validate the model."""
     model.eval()
     total_loss = 0
@@ -107,11 +113,16 @@ def validate(model, val_loader, device, mask_ratio, epoch):
             total=len(val_loader), desc=f"Epoch {epoch} [Val]", unit="batch"
         ) as pbar:
             for batch in val_loader:
-                batch = batch.to(device)
-                
-                # Forward pass
-                output = model(batch, mask_ratio=mask_ratio)
-                loss = output['loss']
+                if loss is None: # SSL
+                    batch = batch.to(device)  # [B, 2, 256]
+                    # Forward pass
+                    output = model(batch, mask_ratio=mask_ratio)
+                    loss = output['loss']
+                else: # Classification
+                    inputs, targets = batch
+                    inputs, targets = inputs.to(device), targets.to(device)
+                    outputs = model(inputs)
+                    loss = loss(outputs, targets)
                 
                 total_loss += loss.item()
                 num_batches += 1
