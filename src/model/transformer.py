@@ -7,7 +7,7 @@ from .model_utils import *
 # Transformer Autoencoder 
 # -----------------
 class TransformerAutoencoder(nn.Module):
-    def __init__(self, in_channels=2, emb_size=64, patch_size=10, num_layers=2, nhead=4, max_len=5000):
+    def __init__(self, in_channels=2, emb_size=64, patch_size=10, num_layers=2, nhead=4, max_len=5000, patch_norm=False):
         """ 1D Transformer Autoencoder with Masked Autoencoding
         Args:
             in_channels (int): Number of input channels (e.g., ECG leads)
@@ -18,6 +18,7 @@ class TransformerAutoencoder(nn.Module):
             max_len (int): Maximum length of the input signal (in samples)
         """
         super().__init__()
+        self.patch_norm = patch_norm
         self.patch_size = patch_size
         self.in_channels = in_channels
         self.emb_size = emb_size
@@ -42,6 +43,7 @@ class TransformerAutoencoder(nn.Module):
         # Reconstruct layer: Projects token dim (emb_size) back to patch dim (C * P)
         self.reconstruct = nn.Linear(self.emb_size, self.in_channels * patch_size)
 
+    
     @torch.no_grad()
     def encode(self, x):
         """Return encoder representation (no masking, no decoder)."""
