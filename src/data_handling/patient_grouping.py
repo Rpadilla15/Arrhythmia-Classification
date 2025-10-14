@@ -105,11 +105,12 @@ if __name__ == "__main__":
     print("Val:\n", np.sum(y_val, axis=0) / len(y_val))
     print("Test:\n", np.sum(y_test, axis=0) / len(y_test))
 
-
     experiment_name = f"{'_'.join(required_leads)}_strat_60_20_20_rd42.json"
     experiment_dir = os.path.join(DATA_DIR, 'input', 'experiment')
     experriment = {
         "train": X_train_patients.flatten().tolist(),
+        "freq_train": (np.sum(y_train, axis=0)).flatten().tolist(),
+        "invs_freq_train": (np.sum(y_train)/np.sum(y_train, axis=0)).flatten().tolist(),
         "val": X_val_patients.flatten().tolist(),
         "test": X_test_patients.flatten().tolist(),
         "leads": required_leads

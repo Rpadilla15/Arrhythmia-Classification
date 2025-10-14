@@ -124,7 +124,7 @@ def map_annotations(ann_df, mapping, one_hot=False):
         if raw_label in mapping:
             location.append(row["Sample"])
             if one_hot:
-                labels.append([1 if mapping[raw_label]==cls else 0 for cls in labels_set])
+                labels.append([1.0 if mapping[raw_label]==cls else 0.0 for cls in labels_set])
             else:
                 labels.append(mapping[raw_label])  # first element is the class index
     return np.array(location), np.array(labels)

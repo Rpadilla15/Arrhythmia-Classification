@@ -49,8 +49,10 @@ class ECGDataset(Dataset):
 
         # Build global index of (record_id, position)
         self.index = []
+        self.labels = []  # only for classification mode
         for rid, rec in enumerate(self.records):
             sig_len = len(rec["signals"][self.leads[0]])
+            self.labels.append(rec["annotations"]["labels"])
             for s in rec["annotations"]["samples"]:
                 if s - window_size // 2 >= 0 and s + window_size // 2 <= sig_len:
                     self.index.append((rid, s))
@@ -81,7 +83,7 @@ class ECGDataset(Dataset):
         elif self.mode == "clsf":
             label_idx = np.where(rec["annotations"]["samples"] == pos)[0][0]
             y = rec["annotations"]["labels"][label_idx]
-            return x, torch.tensor(y, dtype=torch.long)
+            return x, torch.tensor(y, dtype=torch.float32)
 
 
 class ECGAugmentation:
@@ -91,9 +93,9 @@ class ECGAugmentation:
         "ssl": {
             "amplitude_scale_range": (0.8, 1.2),
             "baseline_shift_range": (-0.1, 0.1),
-            "noise_std": 0.02,
-            "time_warp_range": (0.8, 1.2),
-            "time_warp_prob": 0.7,
+            "noise_std": 0.01,
+            "time_warp_range": (0.9, 1.1),
+            "time_warp_prob": 0.5,
         },
         "clsf": {
             "amplitude_scale_range": (0.95, 1.05),
@@ -107,7 +109,7 @@ class ECGAugmentation:
     def __init__(self, preset=None, **kwargs):
         """
         Args:
-            preset (str, optional): One of {'ssl', 'clsf', 'domain'} for predefined settings.
+            preset (str, optional): One of {'ssl', 'clsf'} for predefined settings.
             kwargs: Override specific parameters if desired.
         """
         # Start from preset defaults if provided
