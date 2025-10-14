@@ -68,7 +68,7 @@ class ECGPreprocessor:
         sig = self.resample_signal(sig)
         return sig
     
-    def process(self, sig_df, ann_df,mapping):
+    def process(self, sig_df, ann_df, mapping):
         # Map labels to AMII groups
         ann, labels = map_annotations(ann_df, mapping, one_hot=True)
 

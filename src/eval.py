@@ -96,12 +96,12 @@ if __name__ == "__main__":
     ROOT_DIR = BASE_DIR.parent.parent.parent
     DATA_DIR =  os.path.join(ROOT_DIR, 'Data')
 
-    preprocessed_data_dir = os.path.join(DATA_DIR, 'input', 'preprocessed_data',"fs250_bp0.5-45Hz_oneHot_01")
+    preprocessed_data_dir = os.path.join(DATA_DIR, 'input', 'preprocessed_data',"fs250_bp0.5-45Hz_oneHot")
     
     json_split_path = os.path.join(DATA_DIR, 'input', 'experiment', 'MLII_V1_strat_60_20_20_rd42.json')
 
     encoder_path = os.path.join(DATA_DIR, 'output','encoder','beat_centered_128_16_75', 'best_model.pt')
-    classif_path = os.path.join(DATA_DIR, 'output','classif_model','full1', 'best_model.pt')
+    classif_path = os.path.join(DATA_DIR, 'output','classif_model','test', 'best_model.pt')
 
 
     val_dataset = ECGDataset(
@@ -140,7 +140,7 @@ if __name__ == "__main__":
     encoder.load_state_dict(encoder_saved["model_state_dict"])
     encoder.eval()
 
-    classifier = MLP_head(encoder=encoder, emb_size=emb_size, num_classes=2)
+    classifier = MLP_head(encoder=encoder, emb_size=emb_size, num_classes=5)
      # Load pretrained weights
     classif_saved = torch.load(classif_path, 
         map_location='cpu',  # Safest default device to map to
@@ -152,8 +152,8 @@ if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     classifier.to(device)
 
-    # class_names = ["F", "N", "Q", "S", "V"]  # example
-    class_names = ["A", "N"]  # example
+    class_names = ["F", "N", "Q", "S", "V"]  # example
+    # class_names = ["A", "N"]  # example
 
 
     metrics = evaluate_model(classifier, test_loader, device, class_names)

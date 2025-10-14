@@ -7,12 +7,14 @@ import numpy as np
 import os
 import json
 import torch.nn.functional as F
-
-
-
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
+from sklearn.metrics import (
+    balanced_accuracy_score, 
+    f1_score, 
+    precision_score, 
+    recall_score,
+    roc_auc_score,
+    confusion_matrix
+)
 
 
 # ============================================================================
@@ -195,41 +197,112 @@ class EarlyStopping:
         return self.early_stop
 
 
+def calculate_metrics(all_preds, all_targets, all_probs=None, num_classes=None):
+    """
+    Calculate classification metrics that handle class imbalance.
+    
+    Args:
+        all_preds: Predicted class labels
+        all_targets: True class labels
+        all_probs: Predicted probabilities (optional, for AUC)
+        num_classes: Number of classes (required for AUC)
+    
+    Returns:
+        Dictionary of metrics
+    """
+    metrics = {}
+    
+    # Balanced Accuracy - accounts for class imbalance
+    metrics['balanced_accuracy'] = balanced_accuracy_score(all_targets, all_preds)
+    
+    # Macro-averaged metrics - treat all classes equally
+    metrics['macro_f1'] = f1_score(all_targets, all_preds, average='macro', zero_division=0)
+    metrics['macro_precision'] = precision_score(all_targets, all_preds, average='macro', zero_division=0)
+    metrics['macro_recall'] = recall_score(all_targets, all_preds, average='macro', zero_division=0)
+    
+    # Weighted metrics - account for class distribution
+    metrics['weighted_f1'] = f1_score(all_targets, all_preds, average='weighted', zero_division=0)
+    
+    # Regular accuracy for reference
+    metrics['accuracy'] = (all_preds == all_targets).mean()
+    
+    # Per-class metrics
+    per_class_f1 = f1_score(all_targets, all_preds, average=None, zero_division=0)
+    for i, score in enumerate(per_class_f1):
+        metrics[f'f1_class_{i}'] = score
+    
+    # AUC scores if probabilities provided
+    if all_probs is not None and num_classes is not None:
+        try:
+            if num_classes == 2:
+                # Binary classification
+                metrics['auc_roc'] = roc_auc_score(all_targets, all_probs[:, 1])
+            else:
+                # Multi-class (one-vs-rest, macro average)
+                metrics['auc_roc_macro'] = roc_auc_score(
+                    all_targets, all_probs, 
+                    multi_class='ovr', 
+                    average='macro'
+                )
+        except ValueError:
+            # Handle cases where not all classes are present
+            pass
+    
+    # Confusion matrix for deeper analysis
+    cm = confusion_matrix(all_targets, all_preds)
+    metrics['confusion_matrix'] = cm.tolist()
+    
+    return metrics
+
+
 def train_epoch(model, train_loader, optimizer, scheduler, device, mask_ratio, epoch, criterion=None, strategy=None):
     """Train for one epoch."""
     model.train()
     total_loss = 0
     num_batches = 0
     
+    # For classification metrics
+    all_preds = []
+    all_targets = []
+    all_probs = []
+    
     with tqdm(
             total=len(train_loader), desc=f"Epoch {epoch} [Train]", unit="batch"
         ) as pbar:
         for batch in train_loader:
 
-            if criterion is None: # SSL
-                batch = batch.to(device)  # [B, 2, 256]
-                # Forward pass
+            if criterion is None:  # SSL
+                batch = batch.to(device)
                 output = model(batch, mask_ratio=mask_ratio)
                 loss = output['loss']
-            else: # Classification
+            else:  # Classification
                 inputs, targets = batch
                 inputs, targets = inputs.to(device), targets.to(device)
+                
                 # Apply mixup if specified
                 if strategy == 'mixup':
                     inputs, y_a, y_b, lam = mixup_data(inputs, targets, alpha=0.2)
                     outputs = model(inputs)
                     loss = mixup_criterion(criterion, outputs, y_a, y_b, lam)
+                    # Note: Skip metrics calculation for mixup batches
                 else:
                     outputs = model(inputs)
                     loss = criterion(outputs, targets)
-
-                
+                    
+                    # Collect predictions for metrics (only when not using mixup)
+                    probs = torch.softmax(outputs, dim=1)
+                    preds = torch.argmax(outputs, dim=1)
+                    targets = torch.argmax(targets, dim=1)
+                    
+                    all_preds.append(preds.cpu().numpy())
+                    all_targets.append(targets.cpu().numpy())
+                    all_probs.append(probs.detach().cpu().numpy())
 
             # Backward pass
             optimizer.zero_grad()
             loss.backward()
             
-            # Gradient clipping (important for transformer stability)
+            # Gradient clipping
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             
             optimizer.step()
@@ -247,7 +320,18 @@ def train_epoch(model, train_loader, optimizer, scheduler, device, mask_ratio, e
             pbar.update(1)
     
     avg_loss = total_loss / num_batches
-    return avg_loss
+    
+    # Calculate training metrics for classification
+    train_metrics = {}
+    if criterion is not None and len(all_preds) > 0 and strategy != 'mixup':
+        all_preds = np.concatenate(all_preds)
+        all_targets = np.concatenate(all_targets)
+        all_probs = np.concatenate(all_probs)
+        num_classes = all_probs.shape[1]
+        
+        train_metrics = calculate_metrics(all_preds, all_targets, all_probs, num_classes)
+    
+    return avg_loss, train_metrics
 
 
 @torch.no_grad()
@@ -257,21 +341,34 @@ def validate(model, val_loader, device, mask_ratio, epoch, criterion=None):
     total_loss = 0
     num_batches = 0
     
+    # For classification metrics
+    all_preds = []
+    all_targets = []
+    all_probs = []
+    
     with torch.no_grad():
         with tqdm(
             total=len(val_loader), desc=f"Epoch {epoch} [Val]", unit="batch"
         ) as pbar:
             for batch in val_loader:
-                if criterion is None: # SSL
-                    batch = batch.to(device)  # [B, 2, 256]
-                    # Forward pass
+                if criterion is None:  # SSL
+                    batch = batch.to(device)
                     output = model(batch, mask_ratio=mask_ratio)
                     loss = output['loss']
-                else: # Classification
+                else:  # Classification
                     inputs, targets = batch
                     inputs, targets = inputs.to(device), targets.to(device)
                     outputs = model(inputs)
                     loss = criterion(outputs, targets)
+                    
+                    # Collect predictions for metrics
+                    probs = torch.softmax(outputs, dim=1)
+                    preds = torch.argmax(outputs, dim=1)
+                    targets = torch.argmax(targets, dim=1)
+
+                    all_preds.append(preds.cpu().numpy())
+                    all_targets.append(targets.cpu().numpy())
+                    all_probs.append(probs.cpu().numpy())
                 
                 total_loss += loss.item()
                 num_batches += 1
@@ -280,10 +377,21 @@ def validate(model, val_loader, device, mask_ratio, epoch, criterion=None):
                 pbar.update(1)
     
     avg_loss = total_loss / num_batches
-    return avg_loss
+    
+    # Calculate validation metrics for classification
+    val_metrics = {}
+    if criterion is not None and len(all_preds) > 0:
+        all_preds = np.concatenate(all_preds)
+        all_targets = np.concatenate(all_targets)
+        all_probs = np.concatenate(all_probs)
+        num_classes = all_probs.shape[1]
+        
+        val_metrics = calculate_metrics(all_preds, all_targets, all_probs, num_classes)
+    
+    return avg_loss, val_metrics
 
 
-def save_checkpoint(model, optimizer, scheduler, epoch, train_loss, val_loss, path):
+def save_checkpoint(model, optimizer, scheduler, epoch, train_loss, val_loss, path, train_metrics=None, val_metrics=None):
     """Save model checkpoint."""
     checkpoint = {
         'epoch': epoch,
@@ -292,23 +400,27 @@ def save_checkpoint(model, optimizer, scheduler, epoch, train_loss, val_loss, pa
         'scheduler_state_dict': scheduler.state_dict(),
         'train_loss': train_loss,
         'val_loss': val_loss,
+        'train_metrics': train_metrics,
+        'val_metrics': val_metrics,
     }
     torch.save(checkpoint, path)
 
 
 def load_checkpoint(model, optimizer, scheduler, path, device):
     """Load model checkpoint."""
-    checkpoint = torch.load(path, map_location=device, weights_only=False )
+    checkpoint = torch.load(path, map_location=device, weights_only=False)
     model.load_state_dict(checkpoint['model_state_dict'])
     optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
     scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
-    return checkpoint['epoch'], checkpoint['train_loss'], checkpoint['val_loss']
+    return (checkpoint['epoch'], checkpoint['train_loss'], checkpoint['val_loss'],
+            checkpoint.get('train_metrics'), checkpoint.get('val_metrics'))
 
 
 def train(
     model,
     train_dataset,
     val_dataset,
+    sampler=None,
     num_epochs=100,
     batch_size=64,
     learning_rate=1e-3,
@@ -320,7 +432,8 @@ def train(
     patience=15,
     num_workers=4,
     criterion=None,
-    strategy=None):
+    strategy=None,
+    monitor_metric='macro_f1'):  # New parameter
     """
     Complete training loop for ECG MAE.
     
@@ -328,6 +441,7 @@ def train(
         model: TransformerAutoencoder instance
         train_dataset: Training dataset
         val_dataset: Validation dataset
+        sampler: Optional sampler for DataLoader (e.g. balanced)
         num_epochs: Number of training epochs
         batch_size: Batch size
         learning_rate: Peak learning rate (after warmup)
@@ -340,21 +454,31 @@ def train(
         num_workers: DataLoader workers
         criterion: Loss function for classification (None for SSL)
         strategy: Augmentation strategy ('mixup' or None)
+        monitor_metric: Metric to monitor for best model ('balanced_accuracy', 'macro_f1', etc.)
     """
     # Setup
     os.makedirs(save_dir, exist_ok=True)
     device = torch.device(device if torch.cuda.is_available() else 'cpu')
     model = model.to(device)
     
-    # DataLoaders
-    train_loader = DataLoader(
-        train_dataset,
-        batch_size=batch_size,
-        shuffle=True,
-        num_workers=num_workers,
-        pin_memory=True,
-        drop_last=True  # For stable batch norm
-    )
+    if sampler is not None:
+        train_loader = DataLoader(
+            train_dataset,
+            sampler=sampler,
+            batch_size=batch_size,
+            num_workers=num_workers,
+            pin_memory=True,
+            drop_last=True
+        )
+    else:
+        train_loader = DataLoader(
+            train_dataset,
+            batch_size=batch_size,
+            shuffle=True,
+            num_workers=num_workers,
+            pin_memory=True,
+            drop_last=True
+        )
     
     val_loader = DataLoader(
         val_dataset,
@@ -364,7 +488,7 @@ def train(
         pin_memory=True
     )
     
-    # Optimizer (AdamW with weight decay, excluding biases and norms)
+    # Optimizer
     param_groups = [
         {
             'params': [p for n, p in model.named_parameters() 
@@ -389,16 +513,22 @@ def train(
         min_lr=learning_rate * 0.01
     )
     
-    # Early stopping
-    early_stopping = EarlyStopping(patience=patience, min_delta=1e-4, mode='min')
+    # Early stopping - use max mode for metrics, min mode for loss
+    if criterion is not None:
+        early_stopping = EarlyStopping(patience=patience, min_delta=1e-4, mode='max')
+    else:
+        early_stopping = EarlyStopping(patience=patience, min_delta=1e-4, mode='min')
     
     # Training history
     history = {
         'train_loss': [],
         'val_loss': [],
-        'learning_rate': []
+        'learning_rate': [],
+        'train_metrics': [],
+        'val_metrics': []
     }
     
+    best_val_metric = -float('inf') if criterion is not None else float('inf')
     best_val_loss = float('inf')
     
     print(f"{'='*60}")
@@ -413,18 +543,20 @@ def train(
     print(f"  Train samples: {len(train_dataset)}")
     print(f"  Val samples: {len(val_dataset)}")
     print(f"  Model parameters: {sum(p.numel() for p in model.parameters()):,}")
+    if criterion is not None:
+        print(f"  Monitor metric: {monitor_metric}")
     print(f"{'='*60}\n")
     
     # Training loop
     for epoch in range(1, num_epochs + 1):
         # Train
-        train_loss = train_epoch(
+        train_loss, train_metrics = train_epoch(
             model, train_loader, optimizer, scheduler, 
             device, mask_ratio, epoch, criterion, strategy
         )
         
         # Validate
-        val_loss = validate(
+        val_loss, val_metrics = validate(
             model, val_loader, device, mask_ratio, epoch,
             criterion
         )
@@ -434,33 +566,64 @@ def train(
         history['train_loss'].append(train_loss)
         history['val_loss'].append(val_loss)
         history['learning_rate'].append(current_lr)
+        history['train_metrics'].append(train_metrics)
+        history['val_metrics'].append(val_metrics)
         
         # Print epoch summary
-        print(f"Epoch {epoch:3d}/{num_epochs} | "
-              f"Train Loss: {train_loss:.4f} | "
-              f"Val Loss: {val_loss:.4f} | "
-              f"LR: {current_lr:.6f}")
+        print(f"\nEpoch {epoch:3d}/{num_epochs}")
+        print(f"  Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f} | LR: {current_lr:.6f}")
+        
+        # Print classification metrics if available
+        if criterion is not None and val_metrics:
+            print(f"  Validation Metrics:")
+            print(f"    Balanced Accuracy: {val_metrics.get('balanced_accuracy', 0):.4f}")
+            print(f"    Macro F1:          {val_metrics.get('macro_f1', 0):.4f}")
+            print(f"    Weighted F1:       {val_metrics.get('weighted_f1', 0):.4f}")
+            print(f"    Accuracy:          {val_metrics.get('accuracy', 0):.4f}")
+            if 'auc_roc' in val_metrics:
+                print(f"    AUC-ROC:           {val_metrics['auc_roc']:.4f}")
+            elif 'auc_roc_macro' in val_metrics:
+                print(f"    AUC-ROC (macro):   {val_metrics['auc_roc_macro']:.4f}")
+        
+        # Determine whether to save based on criterion type
+        save_best = False
+        if criterion is None:
+            # SSL: use validation loss
+            if val_loss < best_val_loss:
+                best_val_loss = val_loss
+                save_best = True
+        else:
+            # Classification: use specified metric
+            current_metric = val_metrics.get(monitor_metric, -float('inf'))
+            if current_metric > best_val_metric:
+                best_val_metric = current_metric
+                save_best = True
         
         # Save best model
-        if val_loss < best_val_loss:
-            best_val_loss = val_loss
+        if save_best:
             save_checkpoint(
                 model, optimizer, scheduler, epoch,
                 train_loss, val_loss,
-                os.path.join(save_dir, 'best_model.pt')
+                os.path.join(save_dir, 'best_model.pt'),
+                train_metrics, val_metrics
             )
-            print(f"  → Saved best model (val_loss: {val_loss:.4f})")
+            if criterion is None:
+                print(f"  → Saved best model (val_loss: {val_loss:.4f})")
+            else:
+                print(f"  → Saved best model ({monitor_metric}: {best_val_metric:.4f})")
         
         # Save regular checkpoint every 10 epochs
         if epoch % 10 == 0:
             save_checkpoint(
                 model, optimizer, scheduler, epoch,
                 train_loss, val_loss,
-                os.path.join(save_dir, f'checkpoint_epoch_{epoch}.pt')
+                os.path.join(save_dir, f'checkpoint_epoch_{epoch}.pt'),
+                train_metrics, val_metrics
             )
         
         # Early stopping check
-        if early_stopping(val_loss):
+        check_value = val_metrics.get(monitor_metric, -float('inf')) if criterion is not None else val_loss
+        if early_stopping(check_value):
             print(f"\nEarly stopping triggered at epoch {epoch}")
             break
     
@@ -468,16 +631,22 @@ def train(
     save_checkpoint(
         model, optimizer, scheduler, epoch,
         train_loss, val_loss,
-        os.path.join(save_dir, 'final_model.pt')
+        os.path.join(save_dir, 'final_model.pt'),
+        train_metrics, val_metrics
     )
     
     print(f"\n{'='*60}")
     print(f"Training completed!")
-    print(f"Best validation loss: {best_val_loss:.4f}")
+    if criterion is None:
+        print(f"Best validation loss: {best_val_loss:.4f}")
+    else:
+        print(f"Best {monitor_metric}: {best_val_metric:.4f}")
     print(f"Final model saved to: {save_dir}/final_model.pt")
     print(f"{'='*60}\n")
     
     # Save training history
     exp_name = "history.json"
     with open(os.path.join(save_dir, exp_name), 'w') as f:
-        json.dump(history, f, indent=4)
+        json.dump(history, f, indent=4, default=lambda x: x if isinstance(x, (int, float, str, list)) else str(x))
+    
+    return history

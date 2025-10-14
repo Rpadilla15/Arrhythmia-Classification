@@ -8,6 +8,8 @@ import torch
 from model.training_utils import train, FocalLoss, CBLoss
 import argparse
 import numpy as np
+from data_handling.dataset_extended import ECGDataset as ECGDatasetExtended
+from data_handling.dataset_extended import stratified_subset, make_balanced_sampler, compute_alpha_from_weights,visualize_class_distributions
 
 BASE_DIR = Path(__file__).resolve()
 ROOT_DIR = BASE_DIR.parent.parent.parent
@@ -15,7 +17,7 @@ DATA_DIR =  os.path.join(ROOT_DIR, 'Data')
 
 def parse_args():
     parser = argparse.ArgumentParser(description='Train Classifier')
-    parser.add_argument('--exp_name', type=str, required=True,
+    parser.add_argument('--exp_name', type=str, default='test',
                        help='Experiment name')
     parser.add_argument('--save_dir', type=str, default=os.path.join(DATA_DIR, 'output', 'classif_model'),
                        help='Base directory for checkpoints')
@@ -48,7 +50,7 @@ if __name__ == "__main__":
     output_dir = setup_experiment(args)
 
 
-    preprocessed_data_dir = os.path.join(DATA_DIR, 'input', 'preprocessed_data',"fs250_bp0.5-45Hz_oneHot_01")
+    preprocessed_data_dir = os.path.join(DATA_DIR, 'input', 'preprocessed_data',"fs250_bp0.5-45Hz_oneHot")
     
     json_split_path = os.path.join(DATA_DIR, 'input', 'experiment', 'MLII_V1_strat_60_20_20_rd42.json')
 
@@ -58,12 +60,18 @@ if __name__ == "__main__":
 
     train_transfrom = ECGAugmentation(preset='clsf')
     
-    train_dataset = ECGDataset(
+    dataset = ECGDatasetExtended(
     data_dir=preprocessed_data_dir,
     transform=train_transfrom,
     window_size=256,
     json_file_path=json_split_path,      
     mode="clsf")
+
+    # Use only 25% of training data (stratified)
+    train_dataset = stratified_subset(dataset, fraction=1.0)
+
+    # Balanced sampling
+    sampler, class_weights, class_counts = make_balanced_sampler(train_dataset)
 
     val_dataset = ECGDataset(
     data_dir=preprocessed_data_dir,
@@ -90,31 +98,24 @@ if __name__ == "__main__":
     #     map_location='cpu',  # Safest default device to map to
     #     weights_only=False   # Overrides the security check
     # )
-    encoder.load_state_dict(encoder_saved["model_state_dict"])
+    # encoder.load_state_dict(encoder_saved["model_state_dict"])
     # encoder.eval()
     # # 2. Freeze all parameters
     # for param in encoder.parameters():
     #     param.requires_grad = False 
 
-    classifier = MLP_head(encoder=encoder, emb_size=emb_size, num_classes=2)
+    classifier = MLP_head(encoder=encoder, emb_size=emb_size, num_classes=5)
     
     #loss
-    
-    samples_per_class = np.array([0,0]).astype(np.float64)
-    for i in train_dataset.labels:
-        samples_per_class += i.sum(axis=0)
-    print("Samples per class:", samples_per_class)
-    alpha = 1.0 / (samples_per_class + 1e-6)
-    alpha = alpha / alpha.sum() * len(samples_per_class)  # Normalize to num_classes
-    alpha = torch.tensor(alpha, dtype=torch.float32)
 
-    criterion = FocalLoss(alpha=alpha)
+    criterion = FocalLoss()
     # criterion = CBLoss(samples_per_class, beta=0.9999, loss_type='focal')
 
     # Train
     history = train(
         model=classifier,
         train_dataset=train_dataset,
+        sampler=sampler,
         val_dataset=val_dataset,
         num_epochs=100,
         batch_size=256,
