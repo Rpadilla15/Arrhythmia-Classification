@@ -95,3 +95,4 @@ def patch_proj_inv(tensor_transformed, C, patch_size):
                                           .permute(0, 2, 1, 3) \
                                           .reshape(B, C, -1) # -1 infers the final T dimension
     return output_tensor_bct
+

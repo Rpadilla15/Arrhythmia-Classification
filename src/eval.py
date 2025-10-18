@@ -10,6 +10,7 @@ import os
 from model.transformer import TransformerAutoencoder
 from model.MLP_head import MLP_head
 from data_handling.dataset import ECGDataset, ECGAugmentation
+from data_handling.dataset_extended import ECGDataset as ECGDatasetExtended
 import matplotlib.pyplot as plt
 import torch
 from torch.utils.data import DataLoader
@@ -100,16 +101,30 @@ if __name__ == "__main__":
     
     json_split_path = os.path.join(DATA_DIR, 'input', 'experiment', 'MLII_V1_strat_60_20_20_rd42.json')
 
-    encoder_path = os.path.join(DATA_DIR, 'output','encoder','beat_centered_128_16_75', 'best_model.pt')
-    classif_path = os.path.join(DATA_DIR, 'output','classif_model','test', 'best_model.pt')
+    encoder_path = os.path.join(DATA_DIR, 'output','mae_beat', 'checkpoint_epoch_100.pt')
+    classif_path = os.path.join(DATA_DIR, 'output','classif_model','full1', 'best_model.pt')
 
 
-    val_dataset = ECGDataset(
+
+
+    binary = True
+    important = True
+    if binary:
+        num_classes = 2
+    else:
+        if important:
+            num_classes = 3
+        else:
+            num_classes = 5
+
+    val_dataset = ECGDatasetExtended(
     data_dir=preprocessed_data_dir,
     window_size=256,
     json_file_path=json_split_path,      
     mode="clsf",
-    split="test"
+    split="test",
+    binary=binary,
+    important=important
     )
 
     test_loader = DataLoader(
@@ -132,15 +147,20 @@ if __name__ == "__main__":
         max_len=256
     )
 
-    # Load pretrained weights
-    encoder_saved = torch.load(encoder_path, 
-        map_location='cpu',  # Safest default device to map to
-        weights_only=False   # Overrides the security check
-    )
-    encoder.load_state_dict(encoder_saved["model_state_dict"])
-    encoder.eval()
+    # # Load pretrained weights
+    # encoder_saved = torch.load(encoder_path, 
+    #     map_location='cpu',  # Safest default device to map to
+    #     weights_only=False   # Overrides the security check
+    # )
+    # encoder.load_state_dict(encoder_saved["model_state_dict"])
+    # encoder.eval()
 
-    classifier = MLP_head(encoder=encoder, emb_size=emb_size, num_classes=5)
+    classifier = MLP_head(encoder=encoder, 
+                          emb_size=emb_size, 
+                          num_classes=num_classes,
+                          pooling='cls'
+                          )
+    
      # Load pretrained weights
     classif_saved = torch.load(classif_path, 
         map_location='cpu',  # Safest default device to map to
@@ -152,8 +172,12 @@ if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     classifier.to(device)
 
-    class_names = ["F", "N", "Q", "S", "V"]  # example
-    # class_names = ["A", "N"]  # example
+    if binary:
+        class_names = ["A", "N"]  # example
+    elif important:
+        class_names = ["N", "S", "V"]  # example
+    else:
+        class_names = ["F", "N", "Q", "S", "V"]  # example
 
 
     metrics = evaluate_model(classifier, test_loader, device, class_names)

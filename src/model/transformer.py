@@ -29,14 +29,14 @@ class TransformerAutoencoder(nn.Module):
         # Encoder components
         self.encoder_embed = PatchEmbedding1D(self.in_channels, self.emb_size, patch_size)
         encoder_layer = nn.TransformerEncoderLayer(
-            d_model=self.emb_size, nhead=nhead, dim_feedforward=4*self.emb_size, batch_first=True
+            d_model=self.emb_size, nhead=nhead, dim_feedforward=4*self.emb_size, batch_first=True, norm_first=True if patch_norm else False
             )
         self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers*2)
 
         # Decoder components
         self.decoder_pos_embed = LearnedPositionalEmbedding(max_patches, self.emb_size)
         decoder_layer = nn.TransformerEncoderLayer(
-            d_model=self.emb_size, nhead=nhead, dim_feedforward=4*self.emb_size, batch_first=True
+            d_model=self.emb_size, nhead=nhead, dim_feedforward=4*self.emb_size, batch_first=True, norm_first=True if patch_norm else False
             )
         self.decoder = nn.TransformerEncoder(decoder_layer, num_layers=num_layers)
 
@@ -50,7 +50,7 @@ class TransformerAutoencoder(nn.Module):
         self.eval()
         patches = self.encoder_embed(x)
         memory = self.encoder(patches)
-        return memory[:, 0, :]  # CLS token
+        return memory[:, 0, :],  memory[:, 1:, :]  # CLS token, memory
 
     def forward(self, x, mask_ratio=0.75):
         """

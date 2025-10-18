@@ -10,7 +10,7 @@ from sklearn.model_selection import train_test_split
 class ECGDataset(Dataset):
     def __init__(self, data_dir, json_file_path,
                  window_size=1000, split='train',
-                 mode='ssl', transform=None):
+                 mode='ssl', transform=None, binary=False, important=False):
         """
         Args:
             data_dir (str): Directory containing preprocessed .npy files.
@@ -25,6 +25,8 @@ class ECGDataset(Dataset):
         self.mode = mode
         self.split = split
         self.transform = transform
+        self.binary = binary
+        self.important = important
 
         # Load patient splits and lead configuration
         with open(json_file_path, 'r') as f:
@@ -53,8 +55,12 @@ class ECGDataset(Dataset):
         for rid, rec in enumerate(self.records):
             sig_len = len(rec["signals"][self.leads[0]])
             self.labels.append(rec["annotations"]["labels"])
-            for s in rec["annotations"]["samples"]:
-                if s - window_size // 2 >= 0 and s + window_size // 2 <= sig_len:
+            for s, l in zip(rec["annotations"]["samples"], rec["annotations"]["labels"]):
+                get_beat = True
+                if self.important and ((l[0]==1) | (l[2]==1)):
+                    get_beat = False
+
+                if s - window_size // 2 >= 0 and s + window_size // 2 <= sig_len and get_beat:
                     self.index.append((rid, s))
 
     def __len__(self):
@@ -79,8 +85,21 @@ class ECGDataset(Dataset):
             return x
 
         elif self.mode == "clsf":
-            label_idx = np.where(rec["annotations"]["samples"] == pos)[0][0]
+            label_idx = rec["annotations"]["sample_to_label"].get(pos)
             y = rec["annotations"]["labels"][label_idx]
+            if self.binary:
+                binary_y = np.zeros(2)
+                binary_y[int(y[1] == 1)] = 1 
+                y = binary_y
+            if self.important and not self.binary:
+                important_y = np.zeros(3)
+                if y[1] == 1:
+                    important_y[0] = 1
+                elif y[3] == 1:
+                    important_y[1] = 1
+                else:
+                    important_y[2] = 1
+                y = important_y
             return x, torch.tensor(y, dtype=torch.float32)
 
 
@@ -154,10 +173,14 @@ def make_balanced_sampler(dataset):
     Uses get_label_array() so works with Subset and one-hot labels.
     """
     base = dataset.dataset if isinstance(dataset, Subset) else dataset
+    binary = getattr(base, 'binary', False)
     if getattr(base, "mode", None) != "clsf":
         raise ValueError("Balanced sampler only for classification mode")
 
     labels = get_label_array(dataset)        # 1-D int array
+    if binary:
+        # For binary classification, ensure labels are 0 and 1
+        labels = np.where(labels == 1, 1, 0)
     # handle case where some classes may be missing in the subset
     if labels.size == 0:
         raise ValueError("No labels found in dataset")
@@ -198,6 +221,11 @@ def visualize_class_distributions(dataset, sampler=None, class_names=None, relat
         relative: if True, plot relative frequencies; else absolute counts
     """
     labels = get_label_array(dataset)
+    binary = getattr(dataset, 'binary', False)
+    if binary:
+        # For binary classification, ensure labels are 0 and 1
+        labels = np.where(labels == 1, 1, 0)
+
     num_classes = labels.max() + 1
     orig_counts = np.bincount(labels, minlength=num_classes)
     orig_probs = orig_counts / orig_counts.sum()

@@ -1,7 +1,9 @@
 from pathlib import Path
 import os
 from model.transformer import TransformerAutoencoder
-from data_handling.dataset import ECGDataset, ECGAugmentation
+from data_handling.dataset_extended import ECGDataset
+from data_handling.dataset import ECGAugmentation
+
 import matplotlib.pyplot as plt
 from model.training_utils import train
 import argparse
@@ -55,17 +57,19 @@ if __name__ == "__main__":
 
     train_transfrom = ECGAugmentation(preset='ssl')
     
+    # --- Load dataset ---
     train_dataset = ECGDataset(
     data_dir=preprocessed_data_dir,
-    transform=train_transfrom,
-    window_size=256,
-    json_file_path=json_split_path,      
-    mode="ssl")
+    json_file_path=json_split_path,
+    split="train",
+    mode="ssl",
+    window_size=256
+    )
 
     val_dataset = ECGDataset(
     data_dir=preprocessed_data_dir,
     window_size=256,
-    json_file_path=json_split_path,      
+    json_file_path=json_split_path, 
     mode="ssl",
     split="val"
     )
@@ -77,8 +81,8 @@ if __name__ == "__main__":
         patch_size=16,
         num_layers=2,
         nhead=4,
-        max_len=256
-    )
+        patch_norm=True
+        )
     
     # Train
     history = train(

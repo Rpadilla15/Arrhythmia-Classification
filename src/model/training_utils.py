@@ -113,7 +113,7 @@ class FocalLoss(nn.Module):
             - If list or tensor, length must equal num_classes.
         gamma (float): Focusing parameter (>0 focuses more on hard examples).
     """
-    def __init__(self, alpha=None, gamma=2.0, reduction='mean'):
+    def __init__(self, alpha=None, gamma=2.0):
         super(FocalLoss, self).__init__()
         if isinstance(alpha, (list, torch.Tensor)):
             self.alpha = torch.tensor(alpha, dtype=torch.float32)
@@ -128,10 +128,9 @@ class FocalLoss(nn.Module):
         """
         device = inputs.device
         log_probs = F.log_softmax(inputs, dim=1)
-        probs = torch.exp(log_probs)
 
         # Gather probabilities and log-probabilities of the true class
-        pt = (probs * targets).sum(dim=1)
+        pt = (torch.exp(log_probs) * targets).sum(dim=1)
         log_pt = (log_probs * targets).sum(dim=1)
 
         # Compute alpha weighting per class
@@ -149,7 +148,31 @@ class FocalLoss(nn.Module):
         return loss.mean()
 
 
+class OneHotCrossEntropyLoss(nn.Module):
+    """
+    Computes Categorical Cross-Entropy Loss where targets are one-hot encoded.
+    Always uses 'mean' reduction.
+    """
+    def __init__(self):
+        super().__init__()
 
+
+    def forward(self, inputs: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            inputs (torch.Tensor): Logits (raw outputs) from the model. Shape [B, C].
+            targets (torch.Tensor): One-hot encoded labels. Shape [B, C].
+        """
+            
+        # Compute log probabilities
+        log_probs = F.log_softmax(inputs, dim=1)
+
+        # Compute negative log-likelihood per sample using the one-hot targets
+        # Loss = - sum(y_i * log(p_i))
+        loss_per_sample = -(log_probs * targets).sum(dim=1)
+
+        # 4. Enforce mean reduction
+        return loss_per_sample.mean()
         
 
 def get_cosine_schedule_with_warmup(optimizer, num_warmup_steps, num_training_steps, min_lr=1e-6):

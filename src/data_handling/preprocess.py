@@ -42,11 +42,11 @@ if __name__ == "__main__":
     preproc = ECGPreprocessor(target_fs=target_fs, bandpass=bandpass)
 
     # Preprocess and save to
-    dir_name = f"fs{target_fs}_bp{bandpass[0]}-{bandpass[1]}Hz_oneHot_01"
+    dir_name = f"fs{target_fs}_bp{bandpass[0]}-{bandpass[1]}Hz_oneHot"
     out_dir = os.path.join(DATA_DIR, 'input', 'preprocessed_data', dir_name)
 
     # AAMI class groups
-    with open(os.path.join(DATA_DIR, '01_MAPPING.yaml'), 'r') as f:
+    with open(os.path.join(DATA_DIR, 'AAMI_MAPPING.yaml'), 'r') as f:
         arrhy_mapping = yaml.load(f, Loader=yaml.FullLoader)
 
     main(preproc, out_dir=out_dir, mapping=arrhy_mapping)

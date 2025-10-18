@@ -84,6 +84,7 @@ class ECGPreprocessor:
         
         annotations = {
             "samples": ann,
+            "sample_to_label": {s: i for i, s in enumerate(ann)},
             "labels": labels
         }
 
@@ -114,7 +115,7 @@ def process_record(csv_file, ann_file, out_dir, mapping, preprocessor):
     np.save(os.path.join(out_dir, f"{rec_id}.npy"), record)
 
 
-def map_annotations(ann_df, mapping, one_hot=False):
+def map_annotations(ann_df, mapping, one_hot=True):
     """Filter and map annotations to arrhytmia groups."""
     location = []
     labels = []
